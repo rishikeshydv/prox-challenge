@@ -3,9 +3,10 @@ import { endTavusConversation, getTavusEnvStatus } from "@/lib/tavus/client";
 
 export async function POST(
   _request: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const { id } = await context.params;
     const envStatus = getTavusEnvStatus();
 
     if (!envStatus.ready) {
@@ -17,7 +18,7 @@ export async function POST(
       );
     }
 
-    await endTavusConversation(params.id);
+    await endTavusConversation(id);
     return NextResponse.json({ status: "ended" });
   } catch (error) {
     const message =

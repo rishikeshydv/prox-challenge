@@ -14,8 +14,8 @@ from renderers.polarity_diagram import render_polarity_svg
 from renderers.settings_configurator import render_settings_widget
 from renderers.troubleshooting_flow import render_troubleshooting_widget
 
-PROJECT_ROOT = Path(__file__).parent.parent
-PAGE_IMAGES_DIR = PROJECT_ROOT / "backend" / "static" / "page_images"
+BACKEND_ROOT = Path(__file__).parent
+PAGE_IMAGES_DIR = BACKEND_ROOT / "static" / "page_images"
 
 RENDERERS = {
     "render_polarity_diagram": (

@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import anthropic
 
+from knowledge.store import knowledge_store
 from tool_handlers import handle_tool_call
 from tools import TOOLS
 
@@ -83,6 +85,75 @@ Choose the most helpful response mode for each question:
 """
 
 
+VISUAL_REQUEST_TERMS = (
+    "show",
+    "see",
+    "display",
+    "surface",
+    "what does",
+    "look like",
+    "image",
+    "photo",
+    "diagram",
+)
+
+EXACT_MANUAL_VISUAL_TERMS = (
+    "front panel",
+    "control panel",
+    "panel controls",
+    "parts diagram",
+    "wire feed assembly",
+    "weld diagnosis",
+    "weld example",
+)
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _choose_page_for_visual_request(user_message: str) -> tuple[int | None, str | None]:
+    normalized = _normalize(user_message)
+    is_visual_request = any(term in normalized for term in VISUAL_REQUEST_TERMS)
+    is_exact_manual_visual = any(term in normalized for term in EXACT_MANUAL_VISUAL_TERMS)
+
+    if not (is_visual_request or is_exact_manual_visual):
+        return None, None
+
+    if knowledge_store._kb is None:
+        knowledge_store.load()
+
+    is_front_panel_request = (
+        "front panel" in normalized or "control panel" in normalized or "panel controls" in normalized
+    )
+
+    topic_filter = "parts" if (is_exact_manual_visual and not is_front_panel_request) else None
+    evidence = knowledge_store.search(
+        query=user_message,
+        topic_filter=topic_filter,
+        top_k=10,
+    )
+
+    preferred_terms = []
+    if is_front_panel_request or "controls" in normalized:
+        preferred_terms = ["front panel", "control panel", "controls", "lcd display", "home button", "back button"]
+    elif "parts" in normalized:
+        preferred_terms = ["parts", "assembly", "diagram"]
+
+    for chunk in evidence.text_chunks:
+        content = str(chunk.get("content", "")).lower()
+        section = str(chunk.get("section", "")).lower()
+        if any(term in content or term in section for term in preferred_terms):
+            page = chunk.get("page")
+            if isinstance(page, int):
+                return page, user_message
+
+    if evidence.source_pages:
+        return evidence.source_pages[0], user_message
+
+    return None, None
+
+
 async def run_agent(
     user_message: str,
     conversation_history: list[dict],
@@ -96,6 +167,7 @@ async def run_agent(
     client = anthropic.AsyncAnthropic()
 
     messages = conversation_history + [{"role": "user", "content": user_message}]
+    forced_manual_page, forced_highlight = _choose_page_for_visual_request(user_message)
 
     while True:
         # Stream from Claude
@@ -103,16 +175,30 @@ async def run_agent(
         tool_uses: list[dict] = []
         stop_reason = None
 
+        system_blocks = [
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        if forced_manual_page is not None:
+            system_blocks.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"This request requires the exact manual image. "
+                        f"In this response you MUST call get_manual_page_image with page_number {forced_manual_page}. "
+                        f"Do not say you are unable to display it. After the image is shown, keep the text brief."
+                    ),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            )
+
         async with client.messages.stream(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
-            system=[
-                {
-                    "type": "text",
-                    "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+            system=system_blocks,
             tools=TOOLS,
             messages=messages,
         ) as stream:
@@ -169,6 +255,24 @@ async def run_agent(
 
         # Done if no tool calls
         if not tool_uses or stop_reason == "end_turn":
+            if forced_manual_page is not None and not any(
+                block.get("type") == "tool_use" and block.get("name") == "get_manual_page_image"
+                for block in content_blocks
+            ):
+                forced_input = {"page_number": forced_manual_page}
+                if forced_highlight:
+                    forced_input["highlight_region"] = forced_highlight
+
+                forced_result = await handle_tool_call("get_manual_page_image", forced_input)
+                if forced_result.get("type") == "manual_page":
+                    await event_queue.put(
+                        {
+                            "type": "manual_page",
+                            "image_b64": forced_result["image_base64"],
+                            "page": forced_result["page"],
+                            "highlight": forced_result.get("highlight"),
+                        }
+                    )
             break
 
         # Execute tools and collect results
