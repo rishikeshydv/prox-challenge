@@ -1,7 +1,10 @@
 # Vulcan OmniPro 220 Workshop Assistant
 
-Deployment URL: https://frontend-production-fa28.up.railway.app/
-Loom Video URL: https://www.loom.com/share/a440ce8ec02f456ba59b42d5eddbe531
+Deployment URL:
+https://frontend-production-fa28.up.railway.app/
+
+Loom Video URL:
+https://www.loom.com/share/a440ce8ec02f456ba59b42d5eddbe531
 
 An agentic support assistant for the Vulcan OmniPro 220 welder. It answers setup and troubleshooting questions from the owner's manual, renders visual artifacts when text is not enough, and can optionally launch a Tavus live specialist for guided walkthroughs.
 
